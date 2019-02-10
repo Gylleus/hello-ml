@@ -1,6 +1,6 @@
 # Hello ML
 
-This repository contains a simple implementation of a custom Tensorflow estimator. The estimator is a DNN with a flexible amount of layers and their respective dimensions.
+This repository contains a simple implementation of a custom Tensorflow estimator. The estimator is a DNN with a flexible amount of layers and their respective dimensions. It was implemented merely as a learning exercise to get familiar with the Tensorflow library.
 
 The estimator tries to predict the dollar amount of a purchase made on a certain Black Friday based on information about the customer. The data used is public and was downloaded from [Kaggle](https://www.kaggle.com/mehdidag/black-friday?).
 

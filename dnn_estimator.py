@@ -2,13 +2,15 @@ import pandas as pd
 import tensorflow as tf
 import numpy as np
 import math
+import os
 
 from tensorflow.python import debug as tf_debug
 from sklearn import metrics
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+
 # TODO:
-# Steps to visualize loss change during training (maybe print on modulus on global step?)
-# Clean output from GPU prints
+
 # Save model to file
 
 
@@ -18,7 +20,7 @@ from sklearn import metrics
 ###########################
 
 # Total amount of data points to use for training and validation
-data_points = 50000
+data_points = 500
 # Proportion of total data D that is validation V (training data left is D - (V*D) )
 val_data_proportion = 0.2
 
@@ -26,10 +28,13 @@ feature_fields = ['Gender', 'Age', 'City_Category', 'Occupation', 'Marital_Statu
         'Product_Category_1', 'Product_Category_2', 'Product_Category_3']
 
 # Training parameters
-training_steps = 5000
-batch_size = 10
-learning_rate = 0.0003
-hidden_layers = [50,30,10]
+training_steps = 50
+batch_size = 20
+learning_rate = 0.0001
+hidden_layers = [50,30,30]
+
+# Amount of times to segment training to output current state
+training_periods = 5
 
 
 ####################
@@ -63,7 +68,6 @@ def create_feature_cols(features):
     # Columns with strings as features
     voc_cols = ['Gender', 'Age', 'City_Category', 'Stay_In_Current_City_Years']
     id_cols = ['Marital_Status', 'Product_Category_1', 'Product_Category_2', 'Product_Category_3']
-  #  voc_cols = []
     for c in voc_cols:
         cols.append(tf.feature_column.indicator_column(
             tf.feature_column.categorical_column_with_vocabulary_list(
@@ -89,7 +93,6 @@ def train_input_fn(features, labels, batch_size=1, shuffle=True):
 
 # TODO: Gor om features till feature_columns
 def bf_model_fn(features, labels, mode, params):
-    print(mode)
     current_layer = tf.feature_column.input_layer(features, params["feature_columns"])
     for layer_dim in params["hidden_units"]:
         current_layer = tf.layers.dense(current_layer, layer_dim)
@@ -98,8 +101,8 @@ def bf_model_fn(features, labels, mode, params):
 
     if mode == tf.estimator.ModeKeys.PREDICT:
         predictions = {'Price': output_layer}
-        print("menk")
-        return tf.estimator.EstimatorSpec(mode, predictions=predictions)
+        export_outputs = {'prediction': tf.estimator.export.PredictOutput(predictions)}
+        return tf.estimator.EstimatorSpec(mode, predictions=predictions,export_outputs=export_outputs)
 
     loss = tf.math.sqrt(tf.losses.mean_squared_error(labels, output_layer))
     
@@ -133,7 +136,7 @@ validation_data = df.tail(int(val_data_proportion * data_points))
 validation_feats = format_features(validation_data)
 validation_labels = format_labels(validation_data)
 
-
+# Define estimator
 bf_model = tf.estimator.Estimator(
     model_fn=bf_model_fn,
     params={
@@ -142,27 +145,42 @@ bf_model = tf.estimator.Estimator(
         "learning_rate": learning_rate
     })
 
-bf_model.train(
-    input_fn=lambda:train_input_fn(training_feats, training_labels, batch_size=batch_size),
-    steps=training_steps
-)
+# Training loop
+for i in range(training_periods):
+    steps = training_steps / training_periods
+    print("Training with steps %i ..." % steps)
+    bf_model.train(
+        input_fn=lambda:train_input_fn(training_feats, training_labels, batch_size=batch_size),
+        steps=steps
+    )
+    print("Evaluating ...")
+    eval_res = bf_model.evaluate(
+        input_fn=lambda:train_input_fn(validation_feats, validation_labels, batch_size=batch_size)
+    )
+    print("Current evaluation loss: %i" % eval_res['loss'])
 
-eval_res = bf_model.evaluate(
-    input_fn=lambda:train_input_fn(validation_feats, validation_labels, batch_size=batch_size)
-)
+print("Final evaluation loss: %i" % eval_res['loss'])
 
-print("Evaluation loss: %i" % eval_res['loss'])
 
-test = df.tail(500)
-test_features = format_features(test)
-test_labels = format_labels(test)
 
-print("kek")
-predictions = bf_model.predict(
-        input_fn=lambda:train_input_fn(test_features,labels=test_labels,batch_size=1,shuffle=False)
-)
-print("lelo")
-predictions = np.array([p['Price'] for p in predictions])
+def serving_input_receiver_fn(default_batch_size=None):
+    feature_spec = {
+        'Gender': tf.FixedLenFeature([], tf.string),
+        'Age': tf.FixedLenFeature([], tf.string),
+        'City_Category': tf.FixedLenFeature([], tf.string),
+        'Occupation': tf.FixedLenFeature([], tf.int64),
+        'Marital_Status': tf.FixedLenFeature([], tf.int64),
+        'Stay_In_Current_City_Years': tf.FixedLenFeature([], tf.string),
+        'Product_Category_1': tf.FixedLenFeature([], tf.int64),
+        'Product_Category_2': tf.FixedLenFeature([], tf.int64),
+        'Product_Category_3': tf.FixedLenFeature([], tf.int64),
+    }
+    example = tf.placeholder(
+      shape=[default_batch_size],
+      dtype=tf.string,
+    )
+    features = tf.parse_example(example, feature_spec)
+    receiver_tensors = {'example': example}
+    return tf.estimator.export.ServingInputReceiver(features, receiver_tensors)
 
-rmse = math.sqrt(metrics.mean_squared_error(test_labels, predictions))
-print("RMSE on test data: %0.2f" % rmse)
+bf_model.export_saved_model(".", serving_input_receiver_fn)
